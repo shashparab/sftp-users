@@ -1,0 +1,12 @@
+# Gemini-generated file
+GEMINI.md
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.plan
+
+# OS-specific
+.DS_Store

@@ -1,0 +1,8 @@
+UserName: roopali.parab
+SshPublicKey: "ssh-rsa AAAA..."
+IamRoleArn: "arn:aws:iam::123456789012:role/sftp-user-role"
+HomeDirectory: "/my-bucket/home/roopali.parab"
+HomeDirectoryMappings:
+  "/": "/my-bucket/home/roopali.parab"
+HomeDirectoryType: "LOGICAL"
+Environment: "dev"

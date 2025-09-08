@@ -1,0 +1,44 @@
+image: hashicorp/terraform:latest
+
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}/example
+  # !!! IMPORTANT !!!
+  # You must change this variable to the name of your S3 bucket for Terraform state.
+  TF_STATE_BUCKET: "your-terraform-state-bucket"
+
+before_script:
+  - apk --no-cache add bash git
+
+stages:
+  - validate
+  - plan
+  - apply
+
+validate:
+  stage: validate
+  script:
+    - cd ${TF_ROOT}
+    - terraform init -reconfigure
+    - terraform validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+plan:
+  stage: plan
+  script:
+    - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
+    - ${CI_PROJECT_DIR}/ci/manage-users.sh plan
+  artifacts:
+    paths:
+      - ${TF_ROOT}/*.plan
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+apply:
+  stage: apply
+  script:
+    - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
+    - ${CI_PROJECT_DIR}/ci/manage-users.sh apply
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

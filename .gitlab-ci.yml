@@ -1,44 +1,74 @@
 image: hashicorp/terraform:latest
 
 variables:
-  TF_ROOT: ${CI_PROJECT_DIR}/example
   # !!! IMPORTANT !!!
   # You must change this variable to the name of your S3 bucket for Terraform state.
   TF_STATE_BUCKET: "your-terraform-state-bucket"
 
 before_script:
   - apk --no-cache add bash git
+  - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
 
 stages:
+  - detect
   - validate
   - plan
   - apply
 
+detect-changes:
+  stage: detect
+  script:
+    - ${CI_PROJECT_DIR}/ci/manage-users.sh detect > changes.txt
+  artifacts:
+    paths:
+      - changes.txt
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
 validate:
   stage: validate
   script:
-    - cd ${TF_ROOT}
+    - cd ${CI_PROJECT_DIR}/example
     - terraform init -reconfigure
     - terraform validate
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 plan:
   stage: plan
+  needs: ["detect-changes"]
   script:
-    - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
-    - ${CI_PROJECT_DIR}/ci/manage-users.sh plan
+    - |
+      if [ ! -s changes.txt ]; then
+        echo "No changes detected. Skipping plan."
+        exit 0
+      fi
+      while read -r status file_path; do
+        USER_NAME=$(basename ${file_path} .yml)
+        ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
+        ${CI_PROJECT_DIR}/ci/manage-users.sh plan ${USER_NAME} ${status}
+      done < changes.txt
   artifacts:
     paths:
-      - ${TF_ROOT}/*.plan
+      - example/*.plan
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 apply:
   stage: apply
   script:
-    - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
-    - ${CI_PROJECT_DIR}/ci/manage-users.sh apply
+    - |
+      # For the apply job, we must detect the changes again as it runs on the merged main branch.
+      ${CI_PROJECT_DIR}/ci/manage-users.sh detect > changes.txt
+      if [ ! -s changes.txt ]; then
+        echo "No changes detected. Skipping apply."
+        exit 0
+      fi
+      while read -r status file_path; do
+        USER_NAME=$(basename ${file_path} .yml)
+        # The plan file was created in the plan job for the MR and is not available here.
+        # We must re-run init and plan before applying.
+        ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
+        ${CI_PROJECT_DIR}/ci/manage-users.sh plan ${USER_NAME} ${status}
+        ${CI_PROJECT_DIR}/ci/manage-users.sh apply ${USER_NAME}
+      done < changes.txt
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

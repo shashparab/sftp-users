@@ -1,56 +1,88 @@
 #!/bin/bash
-
 set -e
 
-ACTION=$1
-TF_ROOT_DIR="${CI_PROJECT_DIR}/example"
-USERS_DIR="${TF_ROOT_DIR}/users"
+# This script acts as a collection of helper functions for the GitLab CI pipeline.
 
-# Get the list of changed user files with their status (A, M, D)
-if [ "$CI_PIPELINE_SOURCE" == "merge_request_event" ]; then
-  # For Merge Requests, always compare the branch with the main branch.
-  echo "Pipeline running for a Merge Request. Comparing changes against main branch."
-  git fetch origin main
-  CHANGED_FILES_WITH_STATUS=$(git diff --name-status origin/main...$CI_COMMIT_SHA -- ${USERS_DIR}/*.yml)
-else
-  # For pushes to the default branch, get the changes from the last commit.
-  echo "Pipeline running for a push to the default branch. Getting changes from the last commit."
-  CHANGED_FILES_WITH_STATUS=$(git diff --name-status HEAD~1 HEAD -- ${USERS_DIR}/*.yml)
-fi
+# --- FUNCTION DEFINITIONS ---
 
-if [ -z "$CHANGED_FILES_WITH_STATUS" ]; then
-  echo "No user files changed. Exiting."
-  exit 0
-fi
-
-cd ${TF_ROOT_DIR}
-
-echo "$CHANGED_FILES_WITH_STATUS" | while read -r status file; do
-  USER_CONFIG_FILE_NAME=$(basename ${file})
-  USER_NAME=$(basename ${file} .yml)
-  TF_STATE_KEY="sftp-users/${USER_NAME}/terraform.tfstate"
-
-  echo "--------------------------------------------------"
-  echo "Processing user: ${USER_NAME} (Status: ${status})"
-  echo "--------------------------------------------------"
-
-  # Dynamically configure the backend
-  terraform init -reconfigure \
-    -backend-config="bucket=${TF_STATE_BUCKET}" \
-    -backend-config="key=${TF_STATE_KEY}" \
-    -backend-config="region=${AWS_DEFAULT_REGION}"
-
-  if [ "$ACTION" == "plan" ]; then
-    if [ "$status" == "D" ]; then
-      # For deletions, we plan a destroy action.
-      terraform plan -destroy -out="${USER_NAME}.plan"
+detect_changes() {
+    local changed_files
+    if [ "$CI_PIPELINE_SOURCE" == "merge_request_event" ]; then
+        echo "Pipeline running for a Merge Request. Comparing changes against main branch."
+        git fetch origin main
+        changed_files=$(git diff --name-status origin/main...$CI_COMMIT_SHA -- "${CI_PROJECT_DIR}/example/users/*.yml")
     else
-      # For additions or modifications, we plan an apply action.
-      terraform plan -var="user_config_file=users/${USER_CONFIG_FILE_NAME}" -out="${USER_NAME}.plan"
+        echo "Pipeline running for a push to the default branch. Getting changes from the last commit."
+        changed_files=$(git diff --name-status HEAD~1 HEAD -- "${CI_PROJECT_DIR}/example/users/*.yml")
     fi
-  elif [ "$ACTION" == "apply" ]; then
-      # The plan artifact from the 'plan' stage contains the correct action (apply or destroy).
-      # We apply it here.
-      terraform apply -auto-approve "${USER_NAME}.plan"
-  fi
-done
+
+    if [ -z "$changed_files" ]; then
+        echo "No user files changed. Exiting."
+        exit 0
+    fi
+    echo "$changed_files"
+}
+
+init_backend() {
+    local user_name=$1
+    local tf_state_key="sftp-users/${user_name}/terraform.tfstate"
+
+    echo "--- Initializing backend for ${user_name} ---"
+    cd "${CI_PROJECT_DIR}/example"
+
+    terraform init -reconfigure \
+        -backend-config="bucket=${TF_STATE_BUCKET}" \
+        -backend-config="key=${tf_state_key}" \
+        -backend-config="region=${AWS_DEFAULT_REGION}"
+}
+
+run_plan() {
+    local user_name=$1
+    local status=$2
+    local user_config_file_name="users/${user_name}.yml"
+
+    echo "--- Running terraform plan for ${user_name} (Status: ${status}) ---"
+    cd "${CI_PROJECT_DIR}/example"
+
+    if [ "$status" == "D" ]; then
+        terraform plan -destroy -out="${user_name}.plan"
+    else
+        terraform plan -var="user_config_file=${user_config_file_name}" -out="${user_name}.plan"
+    fi
+}
+
+run_apply() {
+    local user_name=$1
+
+    echo "--- Running terraform apply for ${user_name} ---"
+    cd "${CI_PROJECT_DIR}/example"
+
+    terraform apply -auto-approve "${user_name}.plan"
+}
+
+# --- MAIN EXECUTION ---
+
+main() {
+    local action=$1
+    shift
+    case $action in
+        detect)
+            detect_changes
+            ;; 
+        init)
+            init_backend "$@"
+            ;; 
+        plan)
+            run_plan "$@"
+            ;; 
+        apply)
+            run_apply "$@"
+            ;; 
+        *)
+            echo "Unknown action: $action" >&2
+            exit 1
+            ;; 
+    esac
+}
+
+main "$@"

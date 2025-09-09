@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+
 # This script acts as a collection of helper functions for the GitLab CI pipeline.
 
 # --- FUNCTION DEFINITIONS ---

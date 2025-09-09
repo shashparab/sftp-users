@@ -1,9 +1,9 @@
-UserName: shashank.parab
+UserName: user2
 SshPublicKey: "ssh-rsa AAAA..."
 IamRoleArn: "arn:aws:iam::123456789012:role/sftp-user-role"
-HomeDirectory: "/my-bucket/home/shashank.parab"
+HomeDirectory: "/my-bucket/home/user2"
 HomeDirectoryMappings:
-  "/": "/my-bucket/home/shashank.parab"
+  "/": "/my-bucket/home/user2"
 HomeDirectoryType: "LOGICAL"
 Environment: "dev"
 

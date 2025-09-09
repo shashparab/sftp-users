@@ -10,10 +10,10 @@ detect_changes() {
     if [ "$CI_PIPELINE_SOURCE" == "merge_request_event" ]; then
         echo "Pipeline running for a Merge Request. Comparing changes against main branch."
         git fetch origin main
-        changed_files=$(git diff --name-status origin/main...$CI_COMMIT_SHA -- "${CI_PROJECT_DIR}/example/users/*.yml")
+        changed_files=$(git diff --name-status origin/main...$CI_COMMIT_SHA -- "${CI_PROJECT_DIR}/users/*.yml")
     else
         echo "Pipeline running for a push to the default branch. Getting changes from the last commit."
-        changed_files=$(git diff --name-status HEAD~1 HEAD -- "${CI_PROJECT_DIR}/example/users/*.yml")
+        changed_files=$(git diff --name-status HEAD~1 HEAD -- "${CI_PROJECT_DIR}/users/*.yml")
     fi
 
     if [ -z "$changed_files" ]; then
@@ -28,7 +28,7 @@ init_backend() {
     local tf_state_key="sftp-users/${user_name}/terraform.tfstate"
 
     echo "--- Initializing backend for ${user_name} ---"
-    cd "${CI_PROJECT_DIR}/example"
+    cd "${CI_PROJECT_DIR}"
 
     terraform init -reconfigure \
         -backend-config="bucket=${TF_STATE_BUCKET}" \
@@ -42,7 +42,7 @@ run_plan() {
     local user_config_file_name="users/${user_name}.yml"
 
     echo "--- Running terraform plan for ${user_name} (Status: ${status}) ---"
-    cd "${CI_PROJECT_DIR}/example"
+    cd "${CI_PROJECT_DIR}"
 
     if [ "$status" == "D" ]; then
         terraform plan -destroy -out="${user_name}.plan"
@@ -55,7 +55,7 @@ run_apply() {
     local user_name=$1
 
     echo "--- Running terraform apply for ${user_name} ---"
-    cd "${CI_PROJECT_DIR}/example"
+    cd "${CI_PROJECT_DIR}"
 
     terraform apply -auto-approve "${user_name}.plan"
 }

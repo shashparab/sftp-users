@@ -9,16 +9,16 @@ set -e
 detect_changes() {
     local changed_files
     if [ "$CI_PIPELINE_SOURCE" == "merge_request_event" ]; then
-        echo "Pipeline running for a Merge Request. Comparing changes against main branch."
+        echo "Pipeline running for a Merge Request. Comparing changes against main branch." >&2
         git fetch origin main
         changed_files=$(git diff --name-status origin/main...$CI_COMMIT_SHA -- "${CI_PROJECT_DIR}/users/*.yml")
     else
-        echo "Pipeline running for a push to the default branch. Getting changes from the last commit."
+        echo "Pipeline running for a push to the default branch. Getting changes from the last commit." >&2
         changed_files=$(git diff --name-status HEAD~1 HEAD -- "${CI_PROJECT_DIR}/users/*.yml")
     fi
 
     if [ -z "$changed_files" ]; then
-        echo "No user files changed. Exiting."
+        echo "No user files changed. Exiting." >&2
         exit 0
     fi
     echo "$changed_files"

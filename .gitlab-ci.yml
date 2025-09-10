@@ -19,28 +19,31 @@ detect-changes:
   stage: detect
   script:
     - ${CI_PROJECT_DIR}/ci/manage-users.sh detect > changes.txt
+    - if [ -s changes.txt ]; then echo "CHANGES_PRESENT=true" > changes.env; fi
   artifacts:
     paths:
       - changes.txt
+    reports:
+      dotenv: changes.env
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 validate:
   stage: validate
+  needs: ["detect-changes"]
   script:
     - cd ${CI_PROJECT_DIR}/example
     - terraform init -reconfigure
     - terraform validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CHANGES_PRESENT'
 
 plan:
   stage: plan
   needs: ["detect-changes"]
   script:
     - |
-      if [ ! -s changes.txt ]; then
-        echo "No changes detected. Skipping plan."
-        exit 0
-      fi
       while read -r status file_path; do
         USER_NAME=$(basename ${file_path} .yml)
         ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
@@ -50,18 +53,13 @@ plan:
     paths:
       - example/*.plan
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CHANGES_PRESENT'
 
 apply:
   stage: apply
+  needs: ["detect-changes"]
   script:
     - |
-      # For the apply job, we must detect the changes again as it runs on the merged main branch.
-      ${CI_PROJECT_DIR}/ci/manage-users.sh detect > changes.txt
-      if [ ! -s changes.txt ]; then
-        echo "No changes detected. Skipping apply."
-        exit 0
-      fi
       while read -r status file_path; do
         USER_NAME=$(basename ${file_path} .yml)
         # The plan file was created in the plan job for the MR and is not available here.
@@ -71,4 +69,4 @@ apply:
         ${CI_PROJECT_DIR}/ci/manage-users.sh apply ${USER_NAME}
       done < changes.txt
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CHANGES_PRESENT'

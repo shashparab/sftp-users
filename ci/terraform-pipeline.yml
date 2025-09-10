@@ -1,0 +1,41 @@
+validate:
+  stage: validate
+  needs: ["detect-changes"]
+  script:
+    - cd ${CI_PROJECT_DIR}/example
+    - terraform init -reconfigure
+    - terraform validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+
+plan:
+  stage: plan
+  needs: ["detect-changes"]
+  script:
+    - |
+      while read -r status file_path; do
+        USER_NAME=$(basename ${file_path} .yml)
+        ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
+        ${CI_PROJECT_DIR}/ci/manage-users.sh plan ${USER_NAME} ${status}
+      done < changes.txt
+  artifacts:
+    paths:
+      - example/*.plan
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
+
+apply:
+  stage: apply
+  needs: ["detect-changes"]
+  script:
+    - |
+      while read -r status file_path; do
+        USER_NAME=$(basename ${file_path} .yml)
+        # The plan file was created in the plan job for the MR and is not available here.
+        # We must re-run init and plan before applying.
+        ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
+        ${CI_PROJECT_DIR}/ci/manage-users.sh plan ${USER_NAME} ${status}
+        ${CI_PROJECT_DIR}/ci/manage-users.sh apply ${USER_NAME}
+      done < changes.txt
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

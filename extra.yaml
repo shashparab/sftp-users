@@ -95,7 +95,7 @@ validate-yaml:
     # Extract just the filename without extension, e.g., "users/user1.yml" -> "user1"
     USER_NAME: ""
   before_script:
-    - !reference [before_script] # Inherit global before_script
+    # The global before_script runs automatically before this section.
     - export USER_NAME=$(basename ${USER_FILE} .yml)
     - echo "🚀 Processing secret for user: ${USER_NAME}"
     # This is the core of state isolation. Each user gets a separate state file.

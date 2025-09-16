@@ -1,0 +1,168 @@
+# Use the official HashiCorp Terraform image
+image:
+  name: hashicorp/terraform:1.7.5
+  entrypoint: [""]
+
+# Define the pipeline stages
+stages:
+  - validate
+  - plan
+  - apply
+  - cleanup
+
+# ---------------------------
+#   Workflow Rules
+# ---------------------------
+# This section ensures the pipeline only runs for relevant changes.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event' && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+      changes:
+        - users/**/*
+    - if: $CI_COMMIT_BRANCH == 'main'
+      changes:
+        - users/**/*
+
+# ---------------------------
+#   Global Before Script
+# ---------------------------
+before_script:
+  - echo "Initializing Terraform setup..."
+  - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+  - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+  - export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+  - terraform --version
+
+# -------------------------------------------------------------------
+#  STAGE: VALIDATE
+#  Detects changed files and validates their YAML syntax.
+# -------------------------------------------------------------------
+
+detect-changes:
+  stage: validate
+  image: alpine:latest # Use a lightweight image
+  script:
+    - apk add --no-cache git
+    - echo "Detecting changed user files..."
+    # Determine the base for git diff
+    - |
+      if [[ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" ]]; then
+        # For main branch, compare with the previous commit
+        BASE_SHA="HEAD~1"
+        echo "Running on main branch. Comparing with previous commit ($BASE_SHA)."
+      else
+        # For feature branches/MRs, compare with the target branch (main)
+        BASE_SHA="origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+        echo "Running on feature branch. Comparing with target branch ($BASE_SHA)."
+      fi
+    # Find added/modified and deleted files
+    - git diff --name-status $BASE_SHA HEAD -- users/ | tee changes.txt
+    - ADDED_MODIFIED_FILES=$(grep -E '^(A|M)' changes.txt | awk '{print $2}' | tr '\n' ' ')
+    - DELETED_FILES=$(grep -E '^D' changes.txt | awk '{print $2}' | tr '\n' ' ')
+    - echo "ADDED_MODIFIED_FILES=${ADDED_MODIFIED_FILES}" >> changed_users.env
+    - echo "DELETED_FILES=${DELETED_FILES}" >> changed_users.env
+    - echo "Detected changes:"
+    - cat changed_users.env
+  artifacts:
+    reports:
+      dotenv: changed_users.env # Make variables available to subsequent jobs
+
+validate-yaml:
+  stage: validate
+  image: alpine:latest
+  needs: ["detect-changes"]
+  script:
+    - apk add --no-cache yq
+    - |
+      if [ -z "$ADDED_MODIFIED_FILES" ]; then
+        echo "No new or modified YAML files to validate."
+        exit 0
+      fi
+      echo "Validating YAML syntax for: $ADDED_MODIFIED_FILES"
+      for file in $ADDED_MODIFIED_FILES; do
+        echo "--- Validating $file ---"
+        yq . $file > /dev/null
+      done
+  rules:
+    - if: $ADDED_MODIFIED_FILES != ""
+
+# -------------------------------------------------------------------
+#  TEMPLATE: Reusable Terraform Job Configuration
+# -------------------------------------------------------------------
+.terraform-job-template:
+  variables:
+    # Extract just the filename without extension, e.g., "users/user1.yml" -> "user1"
+    USER_NAME: ""
+  before_script:
+    # The global before_script runs automatically before this section.
+    - export USER_NAME=$(basename ${USER_FILE} .yml)
+    - echo "🚀 Processing secret for user: ${USER_NAME}"
+    # This is the core of state isolation. Each user gets a separate state file.
+    - terraform init -reconfigure \
+        -backend-config="bucket=${TF_STATE_BUCKET}" \
+        -backend-config="key=states/${USER_NAME}/terraform.tfstate" \
+        -backend-config="region=${AWS_DEFAULT_REGION}" \
+        -backend-config="dynamodb_table=${TF_STATE_DYNAMODB_TABLE}"
+
+# -------------------------------------------------------------------
+#  STAGE: PLAN
+#  Generates a Terraform plan for each added/modified user file.
+# -------------------------------------------------------------------
+plan:
+  stage: plan
+  extends: .terraform-job-template
+  needs: ["validate-yaml"]
+  script:
+    - echo "Generating Terraform plan for ${USER_NAME}..."
+    - terraform validate
+    - terraform plan -var-file="${USER_FILE}" -out="${USER_NAME}.tfplan"
+  artifacts:
+    paths:
+      - "${USER_NAME}.tfplan"
+    expire_in: 1 day
+  parallel:
+    matrix:
+      - USER_FILE: ${ADDED_MODIFIED_FILES}
+  rules:
+    - if: $ADDED_MODIFIED_FILES != ""
+
+# -------------------------------------------------------------------
+#  STAGE: APPLY
+#  Applies the Terraform plan for each user. Manual on main.
+# -------------------------------------------------------------------
+apply:
+  stage: apply
+  extends: .terraform-job-template
+  needs:
+    - job: plan
+      artifacts: true
+  script:
+    - echo "Applying Terraform plan for ${USER_NAME}..."
+    - terraform apply -auto-approve "${USER_NAME}.tfplan"
+  parallel:
+    matrix:
+      - USER_FILE: ${ADDED_MODIFIED_FILES}
+  rules:
+    - if: $CI_COMMIT_BRANCH != 'main' && $ADDED_MODIFIED_FILES != ""
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == 'main' && $ADDED_MODIFIED_FILES != ""
+      when: manual # 🛡️ Safety first! Manual approval for main branch.
+
+# -------------------------------------------------------------------
+#  STAGE: CLEANUP
+#  Destroys resources for users whose YAML files were deleted.
+# -------------------------------------------------------------------
+destroy:
+  stage: cleanup
+  extends: .terraform-job-template
+  needs: ["detect-changes"]
+  script:
+    - echo "🔥 Destroying resources for deleted user: ${USER_NAME}..."
+    - terraform destroy -auto-approve -var-file="${USER_FILE}"
+  parallel:
+    matrix:
+      - USER_FILE: ${DELETED_FILES}
+  rules:
+    - if: $CI_COMMIT_BRANCH == 'main' && $DELETED_FILES != ""
+      when: manual # 💣 Destruction is always a manual, deliberate action.

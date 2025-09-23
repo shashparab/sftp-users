@@ -2,31 +2,72 @@ image: hashicorp/terraform:latest
 
 variables:
   TF_STATE_BUCKET: "your-terraform-state-bucket"
+  AWS_DEFAULT_REGION: "your-aws-region"
+  ENV : "dev"
+  TERRAFORM_BACKEND_TYPE: "s3"
+
 
 before_script:
   - apk --no-cache add bash git
   - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
+  - chmod +x ${CI_PROJECT_DIR}/ci/generate-pipeline.sh
 
 stages:
+  - prepare
   - detect
-  - validate
-  - plan
-  - apply
+  - generate-pipeline
+  - deploy
+
+runner-auth:
+  stage: prepare
+  extends: [.runner-artifactory-auth]
+
+vault-aws-auth:
+  stage: prepare
+  extends: [.vault-aws-auth]
+
 
 detect-changes:
   stage: detect
+  needs:
+    - runner-auth
+  dependencies:
+    - runner-auth
   script:
-    - ${CI_PROJECT_DIR}/ci/manage-users.sh detect > changes.txt
-    - if [ -s changes.txt ]; then echo "CHANGES_PRESENT=true" > changes.env; fi
+    - CHANGED_FILES=$(${CI_PROJECT_DIR}/ci/manage-users.sh detect)
+    - mkdir -p artifacts
+    - echo "$CHANGED_FILES" > artifacts/changed_files.txt
+    - cat artifacts/changed_files.txt
+    - |
+      if [ -n "$CHANGED_FILES" ]; then
+        echo "$CHANGED_FILES" | wc -l > artifacts/changed_count.txt
+      else
+        echo "0" > artifacts/changed_count.txt
+      fi
   artifacts:
     paths:
-      - changes.txt
-    reports:
-      dotenv: changes.env
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "push"'
+      - artifacts/changed_files.txt
+      - artifacts/changed_count.txt
+    expire_in: 1 hour
 
-include:
-  - local: 'ci/terraform-pipeline.yml'
-    rules:
-      - if: '$CHANGES_PRESENT'
+generate-pipeline:
+  stage: generate-pipeline
+  needs:
+    - runner-auth
+    - detect-changes
+  script:
+    - ${CI_PROJECT_DIR}/ci/generate-pipeline.sh
+  artifacts:
+    paths:
+      - chiled-pipeline.yml
+    expire_in: 1 hour
+
+trigger-child-pipeline:
+  stage: deploy
+  needs:
+    - generate-pipeline
+  trigger:
+    include: 
+      - artifact: chiled-pipeline.yml
+        job: generate-pipeline
+    strategy: depend

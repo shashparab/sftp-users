@@ -7,58 +7,21 @@ set -e
 # --- FUNCTION DEFINITIONS ---
 
 detect_changes() {
-    local changed_files
+    local CHANGED_FILES
     if [ "$CI_COMMIT_BRANCH" != "$CI_DEFAULT_BRANCH" ]; then
-        echo "Pipeline running for a branch other than default. Comparing changes against default branch." >&2
+        echo "Pipeline running for a branch other than default. Comparing changes against $CI_DEFAULT_BRANCH branch." >&2
         git fetch origin $CI_DEFAULT_BRANCH
-        changed_files=$(git diff --name-status origin/$CI_DEFAULT_BRANCH...$CI_COMMIT_SHA -- "${CI_PROJECT_DIR}/users/*.yml")
+        CHANGED_FILES=$(git diff --name-status origin/$CI_DEFAULT_BRANCH..$CI_COMMIT_SHA -- "${CI_PROJECT_DIR}/users/")
     else
         echo "Pipeline running for a push to the default branch. Getting changes from the last commit." >&2
-        changed_files=$(git diff --name-status HEAD~1 HEAD -- "${CI_PROJECT_DIR}/users/*.yml")
+        CHANGED_FILES=$(git diff --name-status HEAD~1 HEAD -- "${CI_PROJECT_DIR}/users/")
     fi
 
-    if [ -z "$changed_files" ]; then
+    if [ -z "$CHANGED_FILES" ]; then
         echo "No user files changed. Exiting." >&2
         exit 0
     fi
-    echo "$changed_files"
-}
-
-init_backend() {
-    local user_name=$1
-    local tf_state_key="sftp-users/${user_name}/terraform.tfstate"
-
-    echo "--- Initializing backend for ${user_name} ---"
-    cd "${CI_PROJECT_DIR}"
-
-    terraform init -reconfigure \
-        -backend-config="bucket=${TF_STATE_BUCKET}" \
-        -backend-config="key=${tf_state_key}" \
-        -backend-config="region=${AWS_DEFAULT_REGION}"
-}
-
-run_plan() {
-    local user_name=$1
-    local status=$2
-    local user_config_file_name="users/${user_name}.yml"
-
-    echo "--- Running terraform plan for ${user_name} (Status: ${status}) ---"
-    cd "${CI_PROJECT_DIR}"
-
-    if [ "$status" == "D" ]; then
-        terraform plan -destroy -out="${user_name}.plan"
-    else
-        terraform plan -var="user_config_file=${user_config_file_name}" -out="${user_name}.plan"
-    fi
-}
-
-run_apply() {
-    local user_name=$1
-
-    echo "--- Running terraform apply for ${user_name} ---"
-    cd "${CI_PROJECT_DIR}"
-
-    terraform apply -auto-approve "${user_name}.plan"
+    echo "$CHANGED_FILES"
 }
 
 # --- MAIN EXECUTION ---
@@ -69,15 +32,6 @@ main() {
     case $action in
         detect)
             detect_changes
-            ;; 
-        init)
-            init_backend "$@"
-            ;; 
-        plan)
-            run_plan "$@"
-            ;; 
-        apply)
-            run_apply "$@"
             ;; 
         *)
             echo "Unknown action: $action" >&2

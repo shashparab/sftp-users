@@ -1,41 +1,72 @@
-validate:
+image: hashicorp/terraform:latest
+
+include:
+  - project: ci/stable/terraform-templates
+    file: '/templates/terraform.yml'
+
+before_script:
+  - chmod +x ${CI_PROJECT_DIR}/ci/manage-users.sh
+
+variables:
+  TF_VAR_TF_STATE_BUCKET: "your-terraform-state-bucket"
+  TF_VAR_TF_STATE_FILE_KEY: "sftp-users/${USER_NAME}/terraform.tfstate"
+  TF_VAR_TF_STATE_TABLE: "your-terraform-lock-table"
+  TF_VAR_user_config_file: "users/${USER_NAME}.yml"
+  TF_VAR_create_user: "${CREATE_USER}"
+  TERRAFORM_PLAN_NAME: "${USER_NAME}"
+
+stages:
+  - prepare
+  - style-checks
+  - bootstrap
+  - plan
+  - apply
+
+.region-shared:
+  image: ${TERRAFORM_IMAGE}:${TERRAFORM_VERSION}
+
+runner-auth:
+  stage: prepare
+  extends: [.runner-artifactory-auth]
+
+vault-aws-auth:
+  stage: prepare
+  extends: [.vault-aws-auth]
+
+artifactory-ci-user-auth:
+  stage: prepare
+  extends: [.artifactory-ci-user-auth]
+
+terraform-fmt:
+  stage: style-checks
+  extends: [ .region-shared,.terraform-fmt]
+
+tflint:
+  stage: style-checks
+  extends: [ .region-shared,.tflint]
+  needs: [runner-auth, vault-aws-auth]
+  dependencies: [runner-auth, vault-aws-auth]
+
+terraform-init:
+  stage: bootstrap
+  extends: [ .region-shared,.terraform-init]
+  needs: [runner-auth, vault-aws-auth, terraform-fmt]
+  dependencies: [runner-auth, vault-aws-auth]
+
+terraform-validate:
   stage: validate
-  needs: ["detect-changes"]
-  script:
-    - cd ${CI_PROJECT_DIR}/example
-    - terraform init -reconfigure
-    - terraform validate
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "push"'
+  extends: [ .region-shared,.terraform-validate]
+  needs: [runner-auth, vault-aws-auth, terraform-init]
+  dependencies: [runner-auth, vault-aws-auth, terraform-init]
 
-plan:
+terraform-plan:
   stage: plan
-  needs: ["detect-changes"]
-  script:
-    - |
-      while read -r status file_path; do
-        USER_NAME=$(basename ${file_path} .yml)
-        ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
-        ${CI_PROJECT_DIR}/ci/manage-users.sh plan ${USER_NAME} ${status}
-      done < changes.txt
-  artifacts:
-    paths:
-      - example/*.plan
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
+  extends: [ .region-shared,.terraform-plan]
+  needs: [runner-auth, vault-aws-auth, terraform-validate]
+  dependencies: [runner-auth, vault-aws-auth, terraform-validate]
 
-apply:
+terraform-apply:
   stage: apply
-  needs: ["detect-changes"]
-  script:
-    - |
-      while read -r status file_path; do
-        USER_NAME=$(basename ${file_path} .yml)
-        # The plan file was created in the plan job for the MR and is not available here.
-        # We must re-run init and plan before applying.
-        ${CI_PROJECT_DIR}/ci/manage-users.sh init ${USER_NAME}
-        ${CI_PROJECT_DIR}/ci/manage-users.sh plan ${USER_NAME} ${status}
-        ${CI_PROJECT_DIR}/ci/manage-users.sh apply ${USER_NAME}
-      done < changes.txt
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  extends: [ .region-shared,.terraform-apply]
+  needs: [runner-auth, vault-aws-auth, terraform-plan]
+  dependencies: [runner-auth, vault-aws-auth, terraform-plan]
